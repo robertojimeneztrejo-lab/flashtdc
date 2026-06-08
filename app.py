@@ -35,22 +35,19 @@ st.markdown("""
     border-radius: 14px; padding: 2rem 1.5rem;
     text-align: center; min-height: 160px; margin-bottom: .5rem;
 }
-.nc-card-back { background: #E1F5EE; border-color: #5DCAA5; }
-.nc-card-gemini { background: #FAEEDA; border-color: #EF9F27; }
-.nc-tag { font-size:.72rem; letter-spacing:.06em; color:#534AB7; text-transform:uppercase; margin-bottom:.5rem; }
-.nc-tag-error { color:#993C1D; }
-.nc-tag-gemini { color:#854F0B; }
-.nc-main { font-size:1.3rem; font-weight:600; color:#26215C; margin-bottom:.4rem; }
-.nc-main-back { color:#04342C; }
-.nc-main-gemini { color:#412402; }
-.nc-sub { font-size:.9rem; color:#534AB7; }
-.nc-sub-back { color:#085041; }
-.nc-sub-gemini { color:#633806; }
-.nc-hint { font-size:.75rem; color:#888780; margin-top:.8rem; }
-.nc-streak { background:#FAEEDA; border-radius:10px; padding:.5rem 1rem;
-             display:inline-block; font-size:.9rem; color:#633806; font-weight:600; }
-.nc-import-row { background:#F1EFE8; border-radius:10px; padding:.8rem 1rem;
-                 margin-bottom:.5rem; font-size:.85rem; color:#2C2C2A; }
+.nc-card-back  { background: #E1F5EE; border-color: #5DCAA5; }
+.nc-card-amber { background: #FAEEDA; border-color: #EF9F27; }
+.nc-tag        { font-size:.72rem; letter-spacing:.06em; color:#534AB7; text-transform:uppercase; margin-bottom:.5rem; }
+.nc-tag-error  { color:#993C1D; }
+.nc-tag-amber  { color:#854F0B; }
+.nc-main       { font-size:1.3rem; font-weight:600; color:#26215C; margin-bottom:.4rem; }
+.nc-main-back  { color:#04342C; }
+.nc-main-amber { color:#412402; }
+.nc-sub        { font-size:.9rem; color:#534AB7; }
+.nc-sub-back   { color:#085041; }
+.nc-hint       { font-size:.75rem; color:#888780; margin-top:.8rem; }
+.nc-streak     { background:#FAEEDA; border-radius:10px; padding:.5rem 1rem;
+                 display:inline-block; font-size:.9rem; color:#633806; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -117,11 +114,11 @@ def save_session(user_id, reviewed, correct):
 
 
 def update_streak(nc_user):
-    today = datetime.now(timezone.utc).date()
-    last  = nc_user.get("last_session_at")
+    today  = datetime.now(timezone.utc).date()
+    last   = nc_user.get("last_session_at")
     streak = nc_user.get("streak_days", 0)
     if last:
-        diff = (today - datetime.fromisoformat(last).date()).days
+        diff   = (today - datetime.fromisoformat(last).date()).days
         streak = streak + 1 if diff == 1 else (1 if diff > 1 else streak)
     else:
         streak = 1
@@ -134,97 +131,78 @@ def update_streak(nc_user):
 
 # ── Helpers Gemini ───────────────────────────────────────────
 def gemini_ejemplos_tiempo(tense: dict, n: int = 5) -> list[dict]:
-    """Genera N tarjetas de ejemplo cotidiano para un tiempo verbal."""
-    prompt = f"""
-Eres un profesor de inglés nativo. Genera exactamente {n} flashcards para practicar
-el tiempo verbal "{tense['label_es']}" ({tense['name']}).
-Fórmula: {tense.get('formula','')}
-Contexto de uso: {tense.get('example_context_es','')}
-
-Cada tarjeta debe usar una situación de la vida diaria real (trabajo, casa, transporte,
-compras, conversaciones con amigos). Varía las situaciones.
-
-Responde SOLO con un array JSON válido, sin texto adicional ni backticks:
-[
-  {{
-    "front_text": "oración en inglés usando el tiempo verbal",
-    "back_text": "traducción natural al español",
-    "example_sentence": "otra oración de ejemplo en inglés con el mismo tiempo"
-  }}
-]
-"""
+    prompt = (
+        f"Eres un profesor de inglés nativo. Genera exactamente {n} flashcards para practicar "
+        f"el tiempo verbal '{tense['label_es']}' ({tense['name']}).\n"
+        f"Fórmula: {tense.get('formula','')}\n"
+        f"Contexto: {tense.get('example_context_es','')}\n\n"
+        "Cada tarjeta usa una situación cotidiana real (trabajo, casa, transporte, amigos). Varía las situaciones.\n"
+        "Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
+        '[{"front_text":"oración en inglés","back_text":"traducción al español","example_sentence":"otro ejemplo en inglés"}]'
+    )
     try:
         resp = gemini.generate_content(prompt)
-        raw = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         return json.loads(raw)
     except Exception as e:
         st.error(f"Error generando ejemplos con Gemini: {e}")
         return []
 
 
-def gemini_importar_native(lote: list[dict]) -> list[dict]:
-    """Convierte registros de native_expressions en flashcards pedagógicas."""
-    if not lote:
-        return []
-    items = "\n".join(
-        f"{i+1}. EXPRESION: {r['expression']}\n"
-        f"   SIGNIFICADO EN ESPAÑOL: {r['meaning']}\n"
-        f"   EJEMPLO DE USO: {r['example']}\n"
-        f"   TONO: {r['tone']} | ESCENARIO: {r['scenario']}"
-        for i, r in enumerate(lote)
-    )
+def gemini_procesar_native(row: dict) -> dict | None:
+    """Una llamada por registro de native_expressions. Sin mezcla posible."""
     prompt = (
-        "Eres un profesor de inglés nativo. Convierte estas expresiones nativas en flashcards "
-        "para un estudiante hispanohablante llamado Roberto.\n\n"
-        "Expresiones:\n" + items + "\n\n"
-        "Para cada expresión crea una flashcard:\n"
-        "- front_text: pregunta en español que invite a recordar la expresión, usando el escenario y tono como contexto.\n"
-        "  Ejemplo: ¿Cómo dirías en inglés (tono profesional, negocio): Nos gustaría medir el interés?\n"
-        "- back_text: la expresión nativa en inglés, clara y directa.\n"
-        "- example_sentence: el ejemplo de uso en inglés (usa el campo example tal cual o mejóralo).\n"
-        "Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
-        '[\n  {\n    "front_text": "...",\n    "back_text": "...",\n    "example_sentence": "...",\n    "type": "native"\n  }\n]'
+        "Eres un profesor de inglés nativo. Crea UNA flashcard de estudio para un hispanohablante.\n\n"
+        f"EXPRESION NATIVA EN INGLES: {row['expression']}\n"
+        f"SIGNIFICADO EN ESPAÑOL: {row['meaning']}\n"
+        f"EJEMPLO DE USO: {row['example']}\n"
+        f"TONO: {row['tone']}\n"
+        f"ESCENARIO: {row['scenario']}\n\n"
+        "Reglas:\n"
+        "- front_text: pregunta en español usando escenario y tono. "
+        "  Formato: ¿Cómo dirías en inglés (contexto [escenario], tono [tono]): '[significado en español]'?\n"
+        "- back_text: SOLO la expresión nativa en inglés, sin traducción.\n"
+        "- example_sentence: el ejemplo de uso en inglés exactamente como se dio.\n\n"
+        "Responde SOLO con un objeto JSON sin texto adicional ni backticks:\n"
+        '{"front_text":"...","back_text":"...","example_sentence":"..."}'
     )
     try:
         resp = gemini.generate_content(prompt)
-        raw = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(raw)
+        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(raw)
+        data["type"] = "native"
+        return data
     except Exception as e:
-        st.error(f"Error procesando expresiones nativas con Gemini: {e}")
-        return []
+        st.warning(f"Error en expresión '{row.get('expression','')}': {e}")
+        return None
 
 
-def gemini_importar_errores(lote: list[dict]) -> list[dict]:
-    """Convierte registros de error_profile en flashcards pedagógicas."""
-    if not lote:
-        return []
-    items = "\n".join(
-        f"{i+1}. ERROR: {r['error']}\n"
-        f"   CORRECCION: {r['correction']}\n"
-        f"   EXPLICACION: {r['explanation']}\n"
-        f"   FRECUENCIA: {r.get('frequency', 1)}"
-        for i, r in enumerate(lote)
-    )
+def gemini_procesar_error(row: dict) -> dict | None:
+    """Una llamada por registro de error_profile. Sin mezcla posible."""
     prompt = (
-        "Eres un profesor de inglés. Tu estudiante Roberto comete estos errores frecuentes. "
-        "Convierte cada error en una flashcard de corrección motivadora.\n\n"
-        "Errores:\n" + items + "\n\n"
-        "Para cada error crea una flashcard:\n"
-        "- front_text: muestra el patrón de error como pregunta. Ejemplo: ❌ ¿Qué está mal en: She have 30 years?\n"
-        "- back_text: la corrección concisa con la regla. Ejemplo: ✅ She IS 30 — con edad usa to be, no to have.\n"
-        "- example_sentence: una oración correcta adicional que refuerce la regla.\n"
-        "Tono motivador, enfocado en la regla, no en el error.\n"
-        "Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
-        '[\n  {\n    "front_text": "...",\n    "back_text": "...",\n    "example_sentence": "...",\n    "type": "error"\n  }\n]'
+        "Eres un profesor de inglés. Crea UNA flashcard de corrección para Roberto, "
+        "hispanohablante que comete este error en inglés.\n\n"
+        f"ERROR COMETIDO: {row['error']}\n"
+        f"CORRECCION: {row['correction']}\n"
+        f"EXPLICACION DE LA REGLA: {row['explanation']}\n\n"
+        "Reglas:\n"
+        "- front_text: muestra el patrón de error como pregunta con un ejemplo corto inventado. "
+        "  Formato: ❌ ¿Qué está mal en: \"[frase corta de ejemplo del error]\"?\n"
+        "- back_text: la corrección directa con la regla resumida. "
+        "  Formato: ✅ [corrección]. [regla breve].\n"
+        "- example_sentence: oración correcta en inglés que refuerce la regla.\n\n"
+        "Responde SOLO con un objeto JSON sin texto adicional ni backticks:\n"
+        '{"front_text":"...","back_text":"...","example_sentence":"..."}'
     )
     try:
         resp = gemini.generate_content(prompt)
-        raw = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        return json.loads(raw)
+        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(raw)
+        data["type"] = "error"
+        return data
     except Exception as e:
-        st.error(f"Error procesando errores con Gemini: {e}")
-        return []
-
+        st.warning(f"Error procesando '{row.get('error','')}': {e}")
+        return None
 
 
 # ── Autenticación ────────────────────────────────────────────
@@ -260,8 +238,7 @@ def pantalla_login():
                 return
             try:
                 res = supabase.auth.sign_up({
-                    "email": r_email,
-                    "password": r_pass,
+                    "email": r_email, "password": r_pass,
                     "options": {"data": {"display_name": r_name}},
                 })
                 if res.user:
@@ -278,14 +255,12 @@ def modulo_flashcards(user, nc_user):
     st.markdown("### 🃏 Flashcards")
 
     progress_data = get_progress(user.id)
-    known_ids  = {p["card_id"] for p in progress_data if p["known"]}
-    total_seen = len(progress_data)
+    known_ids     = {p["card_id"] for p in progress_data if p["known"]}
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Tarjetas vistas", total_seen)
-    col2.metric("Dominadas ✅", len(known_ids))
-    col3.metric("Para repasar 🔁", sum(1 for p in progress_data if not p["known"]))
-
+    col1.metric("Tarjetas vistas",  len(progress_data))
+    col2.metric("Dominadas ✅",     len(known_ids))
+    col3.metric("Para repasar 🔁",  sum(1 for p in progress_data if not p["known"]))
     st.divider()
 
     filtro = st.radio(
@@ -297,7 +272,7 @@ def modulo_flashcards(user, nc_user):
 
     cards = load_cards(filtro)
     if not cards:
-        st.info("No hay tarjetas con ese filtro. Usa **Importar desde ARIA** en el menú lateral.")
+        st.info("No hay tarjetas con ese filtro. Usa **Importar desde NativeFlow** en el menú lateral.")
         return
 
     random.shuffle(cards)
@@ -315,14 +290,13 @@ def modulo_flashcards(user, nc_user):
 
     tag_class = "nc-tag" if card["type"] == "native" else "nc-tag nc-tag-error"
     tag_label = "Expresión nativa" if card["type"] == "native" else "Error corregido"
-    src_badge = "🤖 ARIA" if card.get("source") == "aria" else ("💬 Chat" if card.get("source") == "chat" else "✍️ Manual")
+    src_badge = "🤖 NativeFlow" if card.get("source") == "aria" else ("💬 Chat" if card.get("source") == "chat" else "✍️ Manual")
 
     if not st.session_state.fc_flipped:
         st.markdown(f"""
         <div class="nc-card">
             <div class="{tag_class}">{tag_label} &nbsp;·&nbsp; {src_badge}</div>
             <div class="nc-main">{card['front_text']}</div>
-            <div class="nc-sub">¿Cómo lo dirías de forma más natural?</div>
             <div class="nc-hint">👆 Toca el botón para ver la respuesta</div>
         </div>
         """, unsafe_allow_html=True)
@@ -381,10 +355,8 @@ def modulo_tiempos(user, nc_user):
         tense_card_ids[t["id"]] = [c["id"] for c in cards]
 
     groups = {
-        "simple":             "Simples",
-        "continuous":         "Continuos",
-        "perfect":            "Perfectos",
-        "perfect_continuous": "Perfecto continuo",
+        "simple": "Simples", "continuous": "Continuos",
+        "perfect": "Perfectos", "perfect_continuous": "Perfecto continuo",
     }
 
     selected_tense = st.session_state.get("selected_tense", None)
@@ -397,17 +369,13 @@ def modulo_tiempos(user, nc_user):
             for i, tense in enumerate(group_tenses):
                 card_ids = tense_card_ids.get(tense["id"], [])
                 known    = sum(1 for p in progress_data if p["card_id"] in card_ids and p["known"])
-                total_c  = len(card_ids)
                 with cols[i % 2]:
                     with st.container(border=True):
                         st.markdown(f"**{tense['label_es']}**")
                         st.caption(f"_{tense.get('example_en','')}_")
                         st.caption(f"📌 {tense.get('example_context_es','')}")
                         st.markdown(f"`{tense.get('formula','')}`")
-                        if total_c:
-                            st.caption(f"✅ {known}/{total_c} dominadas")
-                        else:
-                            st.caption("Sin tarjetas aún")
+                        st.caption(f"✅ {known}/{len(card_ids)} dominadas" if card_ids else "Sin tarjetas aún")
                         if st.button("Practicar →", key=f"tense_{tense['id']}"):
                             st.session_state.selected_tense  = tense
                             st.session_state.tense_flipped   = False
@@ -424,48 +392,38 @@ def modulo_tiempos(user, nc_user):
         st.markdown(f"**Fórmula:** `{tense.get('formula','')}`")
         st.info(f"📌 {tense.get('example_context_es','')}")
 
-        # Cargar tarjetas existentes de Supabase
         if st.session_state.get("tense_cards") is None:
             db_cards = supabase.table("nc_cards").select("*").eq("tense_id", tense["id"]).execute().data or []
             st.session_state.tense_cards = db_cards
 
         cards = st.session_state.tense_cards
 
-        # ── GEMINI: Generar ejemplos cotidianos ──────────────
-        st.divider()
         col_gen1, col_gen2 = st.columns([3, 1])
         with col_gen1:
             n_ejemplos = st.slider("Ejemplos a generar con IA", 3, 10, 5, key="n_ej")
         with col_gen2:
             st.markdown("<br>", unsafe_allow_html=True)
-            gen_btn = st.button("✨ Generar con Gemini", type="primary", use_container_width=True)
-
-        if gen_btn:
-            with st.spinner(f"Gemini está creando {n_ejemplos} ejemplos cotidianos..."):
-                nuevas = gemini_ejemplos_tiempo(tense, n_ejemplos)
-            if nuevas:
+            if st.button("✨ Generar", type="primary", use_container_width=True):
+                with st.spinner(f"Gemini creando {n_ejemplos} ejemplos..."):
+                    nuevas = gemini_ejemplos_tiempo(tense, n_ejemplos)
                 guardadas = []
                 for nc in nuevas:
                     ins = supabase.table("nc_cards").insert({
-                        "type":             "native",
-                        "front_text":       nc.get("front_text", ""),
-                        "back_text":        nc.get("back_text", ""),
-                        "example_sentence": nc.get("example_sentence", ""),
-                        "source":           "manual",
-                        "tense_id":         tense["id"],
-                        "is_active":        True,
+                        "type": "native", "front_text": nc.get("front_text",""),
+                        "back_text": nc.get("back_text",""),
+                        "example_sentence": nc.get("example_sentence",""),
+                        "source": "manual", "tense_id": tense["id"], "is_active": True,
                     }).execute()
                     if ins.data:
                         guardadas.append(ins.data[0])
-                st.success(f"✅ {len(guardadas)} tarjetas nuevas guardadas en Supabase.")
+                st.success(f"✅ {len(guardadas)} tarjetas nuevas guardadas.")
                 st.session_state.tense_cards = (cards or []) + guardadas
                 cards = st.session_state.tense_cards
                 st.rerun()
 
         st.divider()
-
         if not cards:
-            st.warning("Este tiempo aún no tiene tarjetas. Genera algunas con Gemini arriba ☝️")
+            st.warning("Este tiempo aún no tiene tarjetas. Genera algunas con Gemini ☝️")
             return
 
         tidx = st.session_state.get("tense_idx", 0) % len(cards)
@@ -474,9 +432,9 @@ def modulo_tiempos(user, nc_user):
 
         if not st.session_state.get("tense_flipped", False):
             st.markdown(f"""
-            <div class="nc-card nc-card-gemini">
-                <div class="nc-tag nc-tag-gemini">✨ Tiempo verbal · {tense['label_es']}</div>
-                <div class="nc-main nc-main-gemini">{card['front_text']}</div>
+            <div class="nc-card nc-card-amber">
+                <div class="nc-tag nc-tag-amber">✨ {tense['label_es']}</div>
+                <div class="nc-main nc-main-amber">{card['front_text']}</div>
                 <div class="nc-hint">👆 Ver traducción</div>
             </div>
             """, unsafe_allow_html=True)
@@ -506,15 +464,17 @@ def modulo_tiempos(user, nc_user):
                     st.rerun()
 
 
-# ── Módulo Importar desde ARIA ───────────────────────────────
+# ── Módulo Importar desde NativeFlow ─────────────────────────
 def modulo_importar(user):
-    st.markdown("### 🔄 Importar desde ARIA")
+    st.markdown("### 🔄 Importar desde NativeFlow")
     st.markdown(
         "Lee tus tablas `native_expressions` y `error_profile`, "
-        "las procesa con Gemini y guarda flashcards con contexto real en `nc_cards`."
+        "procesa cada registro individualmente con Gemini y guarda "
+        "flashcards con contexto real en `nc_cards`."
     )
 
-    ya_importadas = supabase.table("nc_cards").select("id", count="exact")        .in_("source", ["aria", "chat"]).execute()
+    ya_importadas = supabase.table("nc_cards").select("id", count="exact")\
+        .in_("source", ["aria", "chat"]).execute()
     st.info(f"Tarjetas importadas actualmente: **{ya_importadas.count or 0}**")
 
     col1, col2 = st.columns(2)
@@ -525,67 +485,62 @@ def modulo_importar(user):
 
     if st.button("🚀 Importar y procesar con Gemini", type="primary", use_container_width=True):
         total_guardadas = 0
-        progress_bar = st.progress(0)
-        lote_size = 5
+        total_total     = int(lim_native) + int(lim_error)
+        progress_bar    = st.progress(0)
+        procesadas      = 0
 
-        # ── Expresiones nativas ──────────────────────────────
+        # ── Expresiones nativas — una por una ───────────────
         st.markdown("**Procesando expresiones nativas...**")
         try:
-            nat_rows = supabase.table("native_expressions")                .select("expression, meaning, example, tone, scenario")                .limit(int(lim_native)).execute().data or []
-            st.caption(f"✅ {len(nat_rows)} expresiones nativas leídas.")
+            nat_rows = supabase.table("native_expressions")\
+                .select("expression, meaning, example, tone, scenario")\
+                .limit(int(lim_native)).execute().data or []
+            st.caption(f"✅ {len(nat_rows)} registros leídos.")
         except Exception as e:
             nat_rows = []
             st.warning(f"No se pudo leer native_expressions: {e}")
 
-        for i in range(0, len(nat_rows), lote_size):
-            lote = nat_rows[i:i + lote_size]
-            with st.spinner(f"Gemini procesando expresiones {i+1}–{min(i+lote_size, len(nat_rows))}..."):
-                flashcards = gemini_importar_native(lote)
-            for fc in flashcards:
-                if not fc.get("front_text") or not fc.get("back_text"):
-                    continue
+        for row in nat_rows:
+            with st.spinner(f"Gemini → {row.get('expression','')[:45]}..."):
+                fc = gemini_procesar_native(row)
+            if fc and fc.get("front_text") and fc.get("back_text"):
                 supabase.table("nc_cards").insert({
-                    "type":             "native",
-                    "front_text":       fc["front_text"],
-                    "back_text":        fc["back_text"],
-                    "example_sentence": fc.get("example_sentence", ""),
-                    "source":           "aria",
-                    "is_active":        True,
+                    "type": "native", "front_text": fc["front_text"],
+                    "back_text": fc["back_text"],
+                    "example_sentence": fc.get("example_sentence",""),
+                    "source": "aria", "is_active": True,
                 }).execute()
                 total_guardadas += 1
-            progress_bar.progress(min((i + lote_size) / (len(nat_rows) + len([1])), 0.5))
+            procesadas += 1
+            progress_bar.progress(procesadas / total_total)
 
-        # ── Errores corregidos ───────────────────────────────
+        # ── Errores corregidos — uno por uno ────────────────
         st.markdown("**Procesando errores corregidos...**")
         try:
-            err_rows = supabase.table("error_profile")                .select("error, correction, explanation, frequency")                .limit(int(lim_error)).execute().data or []
-            st.caption(f"✅ {len(err_rows)} errores corregidos leídos.")
+            err_rows = supabase.table("error_profile")\
+                .select("error, correction, explanation, frequency")\
+                .limit(int(lim_error)).execute().data or []
+            st.caption(f"✅ {len(err_rows)} registros leídos.")
         except Exception as e:
             err_rows = []
             st.warning(f"No se pudo leer error_profile: {e}")
 
-        for i in range(0, len(err_rows), lote_size):
-            lote = err_rows[i:i + lote_size]
-            with st.spinner(f"Gemini procesando errores {i+1}–{min(i+lote_size, len(err_rows))}..."):
-                flashcards = gemini_importar_errores(lote)
-            for fc in flashcards:
-                if not fc.get("front_text") or not fc.get("back_text"):
-                    continue
+        for row in err_rows:
+            with st.spinner(f"Gemini → {row.get('error','')[:45]}..."):
+                fc = gemini_procesar_error(row)
+            if fc and fc.get("front_text") and fc.get("back_text"):
                 supabase.table("nc_cards").insert({
-                    "type":             "error",
-                    "front_text":       fc["front_text"],
-                    "back_text":        fc["back_text"],
-                    "example_sentence": fc.get("example_sentence", ""),
-                    "source":           "chat",
-                    "is_active":        True,
+                    "type": "error", "front_text": fc["front_text"],
+                    "back_text": fc["back_text"],
+                    "example_sentence": fc.get("example_sentence",""),
+                    "source": "chat", "is_active": True,
                 }).execute()
                 total_guardadas += 1
-            progress_bar.progress(min(0.5 + (i + lote_size) / (len(err_rows) + len([1])) * 0.5, 1.0))
+            procesadas += 1
+            progress_bar.progress(min(procesadas / total_total, 1.0))
 
         progress_bar.progress(1.0)
         st.success(f"✅ ¡Listo! {total_guardadas} flashcards con contexto real guardadas.")
-        st.balloons()
-
         st.balloons()
 
 
@@ -626,7 +581,6 @@ def modulo_progreso(user, nc_user):
     st.markdown("**Últimas sesiones**")
     sessions = supabase.table("nc_sessions").select("*")\
         .eq("user_id", user.id).order("started_at", desc=True).limit(5).execute().data or []
-
     if sessions:
         for s in sessions:
             fecha = s["started_at"][:10]
@@ -669,9 +623,8 @@ def main():
 
     user    = st.session_state["user"]
     nc_user = get_or_create_nc_user(user)
-
-    nombre = nc_user.get("display_name", "Usuario")
-    streak = nc_user.get("streak_days", 0)
+    nombre  = nc_user.get("display_name", "Usuario")
+    streak  = nc_user.get("streak_days", 0)
 
     st.sidebar.markdown(f"👋 Hola, **{nombre}**")
     st.sidebar.markdown(f"🔥 Racha: **{streak} día{'s' if streak != 1 else ''}**")
@@ -679,14 +632,14 @@ def main():
 
     seccion = st.sidebar.radio(
         "Navegar",
-        ["🃏 Flashcards", "📖 Tiempos verbales", "🔄 Importar desde ARIA", "📊 Progreso", "👤 Perfil"],
+        ["🃏 Flashcards", "📖 Tiempos verbales", "🔄 Importar desde NativeFlow", "📊 Progreso", "👤 Perfil"],
     )
 
     if seccion == "🃏 Flashcards":
         modulo_flashcards(user, nc_user)
     elif seccion == "📖 Tiempos verbales":
         modulo_tiempos(user, nc_user)
-    elif seccion == "🔄 Importar desde ARIA":
+    elif seccion == "🔄 Importar desde NativeFlow":
         modulo_importar(user)
     elif seccion == "📊 Progreso":
         modulo_progreso(user, nc_user)
