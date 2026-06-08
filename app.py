@@ -254,6 +254,8 @@ def modulo_flashcards(user, nc_user):
 
     cards = st.session_state[cache_key]
 
+    if "topic_practicing" not in st.session_state:
+        st.session_state.topic_practicing = None
     if "fc_index" not in st.session_state:
         st.session_state.fc_index    = 0
         st.session_state.fc_flipped  = False
@@ -563,6 +565,316 @@ def modulo_importar(user):
             st.balloons()
 
 
+
+# ── Módulo Tópicos (Vocab ejecutivo, Conectores, Phrasal verbs) ──
+TOPIC_CONFIG = {
+    "executive_vocab": {
+        "label":    "💼 Vocabulario ejecutivo",
+        "color":    "#534AB7",
+        "bg":       "#EEEDFE",
+        "border":   "#AFA9EC",
+        "subtemas": [
+            "Opening a meeting", "Closing a meeting", "Giving your opinion",
+            "Agreeing and disagreeing", "Making proposals", "Negotiations",
+            "Presentations to the board", "Follow-up emails", "Delegating tasks",
+            "Handling objections", "Formal greetings", "Closing deals",
+        ],
+    },
+    "connectors": {
+        "label":    "🔗 Conectores y transiciones",
+        "color":    "#0F6E56",
+        "bg":       "#E1F5EE",
+        "border":   "#5DCAA5",
+        "subtemas": [
+            "Adding ideas", "Contrasting ideas", "Showing cause and effect",
+            "Giving examples", "Summarizing", "Sequencing",
+            "Emphasizing", "Conceding a point", "Concluding",
+        ],
+    },
+    "phrasal_verbs": {
+        "label":    "⚡ Phrasal verbs",
+        "color":    "#854F0B",
+        "bg":       "#FAEEDA",
+        "border":   "#EF9F27",
+        "subtemas": [
+            "Work and career", "Communication", "Problems and solutions",
+            "Planning and decisions", "Relationships", "Money and business",
+            "Time management", "Meetings and presentations",
+        ],
+    },
+}
+
+def gemini_generar_topico(category: str, topic: str, n: int = 8) -> list[dict]:
+    """Genera N entradas para un tópico dado, directamente estructuradas."""
+    cfg = TOPIC_CONFIG[category]
+    if category == "executive_vocab":
+        instruccion = (
+            f"Genera exactamente {n} expresiones o frases en inglés para uso ejecutivo "
+            f"en el contexto: '{topic}'.\n"
+            "Para cada una devuelve:\n"
+            "- word_or_phrase: la expresión en inglés\n"
+            "- meaning_es: traducción natural al español\n"
+            "- example: oración de ejemplo en inglés en contexto ejecutivo\n"
+            "- level: basic, intermediate o advanced"
+        )
+    elif category == "connectors":
+        instruccion = (
+            f"Genera exactamente {n} conectores o frases de transición en inglés "
+            f"para '{topic}'.\n"
+            "Para cada uno devuelve:\n"
+            "- word_or_phrase: el conector en inglés\n"
+            "- meaning_es: equivalente natural en español\n"
+            "- example: oración completa en inglés usando el conector\n"
+            "- level: basic, intermediate o advanced"
+        )
+    else:
+        instruccion = (
+            f"Genera exactamente {n} phrasal verbs en inglés relacionados con '{topic}'.\n"
+            "Para cada uno devuelve:\n"
+            "- word_or_phrase: el phrasal verb\n"
+            "- meaning_es: significado en español\n"
+            "- example: oración natural en inglés usando el phrasal verb\n"
+            "- level: basic, intermediate o advanced"
+        )
+
+    prompt = (
+        "Eres un profesor de inglés experto. " + instruccion + "\n\n"
+        f"Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
+        '[{"word_or_phrase":"...","meaning_es":"...","example":"...","level":"intermediate"}]'
+    )
+    try:
+        resp = gemini.generate_content(prompt)
+        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(raw)
+    except Exception as e:
+        st.error(f"Error generando contenido con Gemini: {e}")
+        return []
+
+
+def upsert_topic_progress(user_id, topic_id, known: bool):
+    existing = supabase.table("nc_user_progress")        .select("*").eq("user_id", user_id).eq("topic_id", topic_id).execute().data
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        row = existing[0]
+        supabase.table("nc_user_progress").update({
+            "known":         known,
+            "times_seen":    row["times_seen"] + 1,
+            "times_correct": row["times_correct"] + (1 if known else 0),
+            "last_seen_at":  now,
+        }).eq("id", row["id"]).execute()
+    else:
+        supabase.table("nc_user_progress").insert({
+            "user_id":       user_id,
+            "topic_id":      topic_id,
+            "card_id":       topic_id,  # placeholder para no violar not-null si existe
+            "known":         known,
+            "times_seen":    1,
+            "times_correct": 1 if known else 0,
+            "last_seen_at":  now,
+        }).execute()
+
+
+def modulo_topicos(user, nc_user):
+    st.markdown("### 📚 Tópicos de inglés")
+
+    # ── Selector de categoría ────────────────────────────────
+    cat_labels = {k: v["label"] for k, v in TOPIC_CONFIG.items()}
+    categoria  = st.radio(
+        "Categoría:",
+        list(cat_labels.keys()),
+        format_func=lambda x: cat_labels[x],
+        horizontal=True,
+        key="topic_cat",
+    )
+    cfg = TOPIC_CONFIG[categoria]
+
+    st.divider()
+
+    # ── Vista principal o práctica ───────────────────────────
+    if st.session_state.get("topic_practicing") is None:
+
+        # Estadísticas rápidas
+        total_db = supabase.table("nc_topics").select("id", count="exact")            .eq("category", categoria).eq("is_active", True).execute()
+        total_n  = total_db.count or 0
+
+        progress_data = supabase.table("nc_user_progress")            .select("*").eq("user_id", user.id).execute().data or []
+        topic_ids_db = {
+            r["id"] for r in
+            supabase.table("nc_topics").select("id")
+            .eq("category", categoria).execute().data or []
+        }
+        known_n = sum(
+            1 for p in progress_data
+            if p.get("topic_id") in topic_ids_db and p["known"]
+        )
+
+        col1, col2 = st.columns(2)
+        col1.metric("Tarjetas generadas", total_n)
+        col2.metric("Dominadas ✅",       known_n)
+
+        st.markdown(f"**Elige un subtema para generar tarjetas:**")
+
+        # Grid de subtemas
+        subtemas = cfg["subtemas"]
+        cols = st.columns(3)
+        for i, subtema in enumerate(subtemas):
+            with cols[i % 3]:
+                # Contar cuántas tarjetas existen para este subtema
+                n_exist = supabase.table("nc_topics").select("id", count="exact")                    .eq("category", categoria).eq("topic", subtema)                    .eq("is_active", True).execute().count or 0
+                badge = f"✅ {n_exist}" if n_exist else "Vacío"
+                with st.container(border=True):
+                    st.markdown(f"**{subtema}**")
+                    st.caption(badge)
+                    if st.button("Practicar →", key=f"tp_{categoria}_{i}"):
+                        st.session_state.topic_practicing = {
+                            "category": categoria,
+                            "topic":    subtema,
+                        }
+                        st.session_state.topic_cards   = None
+                        st.session_state.topic_idx     = 0
+                        st.session_state.topic_flipped = False
+                        st.rerun()
+
+    else:
+        # ── Vista de práctica ────────────────────────────────
+        info = st.session_state.topic_practicing
+        cat  = info["category"]
+        top  = info["topic"]
+        cfg  = TOPIC_CONFIG[cat]
+
+        if st.button("← Volver a tópicos"):
+            st.session_state.topic_practicing = None
+            st.rerun()
+
+        st.markdown(f"#### {cfg['label']} · {top}")
+        st.divider()
+
+        # Cargar tarjetas existentes para este subtema
+        if st.session_state.get("topic_cards") is None:
+            rows = supabase.table("nc_topics").select("*")                .eq("category", cat).eq("topic", top)                .eq("is_active", True).execute().data or []
+            st.session_state.topic_cards = rows
+
+        cards = st.session_state.topic_cards
+
+        # ── Generador Gemini ─────────────────────────────────
+        col_g1, col_g2 = st.columns([3, 1])
+        with col_g1:
+            n_gen = st.slider("Tarjetas a generar", 5, 20, 8, key="topic_n_gen")
+        with col_g2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("✨ Generar", type="primary", use_container_width=True):
+                with st.spinner(f"Gemini generando {n_gen} tarjetas para '{top}'..."):
+                    nuevas = gemini_generar_topico(cat, top, n_gen)
+
+                guardadas = []
+                ya_refs = {c["word_or_phrase"] for c in cards}
+                for item in nuevas:
+                    phrase = item.get("word_or_phrase","").strip()
+                    if not phrase or phrase in ya_refs:
+                        continue
+                    try:
+                        ins = supabase.table("nc_topics").insert({
+                            "category":       cat,
+                            "topic":          top,
+                            "word_or_phrase": phrase,
+                            "meaning_es":     item.get("meaning_es",""),
+                            "example":        item.get("example",""),
+                            "level":          item.get("level","intermediate"),
+                            "is_active":      True,
+                        }).execute()
+                        if ins.data:
+                            guardadas.append(ins.data[0])
+                            ya_refs.add(phrase)
+                    except Exception:
+                        pass  # índice único bloqueó duplicado
+
+                st.success(f"✅ {len(guardadas)} tarjetas nuevas guardadas.")
+                st.session_state.topic_cards = cards + guardadas
+                cards = st.session_state.topic_cards
+                st.rerun()
+
+        st.divider()
+
+        if not cards:
+            st.info("No hay tarjetas aún. Genera algunas con Gemini ☝️")
+            return
+
+        # Shuffle estable
+        cache_key = f"topic_shuffled_{cat}_{top}"
+        if cache_key not in st.session_state or            len(st.session_state[cache_key]) != len(cards):
+            shuffled = cards.copy()
+            random.shuffle(shuffled)
+            st.session_state[cache_key] = shuffled
+            st.session_state.topic_idx     = 0
+            st.session_state.topic_flipped = False
+
+        cards = st.session_state[cache_key]
+        tidx  = st.session_state.get("topic_idx", 0) % len(cards)
+        card  = cards[tidx]
+
+        level_color = {"basic": "#3B6D11", "intermediate": "#854F0B", "advanced": "#993C1D"}.get(card.get("level",""), "#534AB7")
+        level_bg    = {"basic": "#EAF3DE", "intermediate": "#FAEEDA", "advanced": "#FAECE7"}.get(card.get("level",""), "#EEEDFE")
+
+        st.progress(int((tidx / len(cards)) * 100), text=f"Tarjeta {tidx+1} de {len(cards)}")
+
+        if not st.session_state.get("topic_flipped", False):
+            st.markdown(f"""
+            <div style="background:{cfg['bg']};border:1px solid {cfg['border']};
+                        border-radius:14px;padding:2rem 1.5rem;text-align:center;
+                        min-height:160px;margin-bottom:.5rem;">
+                <div style="font-size:.72rem;letter-spacing:.06em;color:{cfg['color']};
+                            text-transform:uppercase;margin-bottom:.5rem;">
+                    {cfg['label']} · {top}
+                </div>
+                <div style="font-size:1.4rem;font-weight:600;color:#26215C;margin-bottom:.4rem;">
+                    {card['word_or_phrase']}
+                </div>
+                <div style="display:inline-block;background:{level_bg};color:{level_color};
+                            font-size:.72rem;padding:3px 10px;border-radius:99px;margin-top:.5rem;">
+                    {card.get('level','intermediate')}
+                </div>
+                <div style="font-size:.75rem;color:#888780;margin-top:1rem;">
+                    👆 Toca el botón para ver el significado
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button("Ver significado 👁", use_container_width=True, key="topic_flip"):
+                st.session_state.topic_flipped = True
+                st.rerun()
+        else:
+            st.markdown(f"""
+            <div style="background:#E1F5EE;border:1px solid #5DCAA5;
+                        border-radius:14px;padding:2rem 1.5rem;text-align:center;
+                        min-height:160px;margin-bottom:.5rem;">
+                <div style="font-size:.72rem;letter-spacing:.06em;color:#0F6E56;
+                            text-transform:uppercase;margin-bottom:.5rem;">Significado</div>
+                <div style="font-size:1.3rem;font-weight:600;color:#04342C;margin-bottom:.6rem;">
+                    {card['meaning_es']}
+                </div>
+                <div style="font-size:.88rem;color:#085041;font-style:italic;">
+                    "{card.get('example','')}"
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if st.button("❌ No lo sabía", use_container_width=True, key="topic_wrong"):
+                    upsert_topic_progress(user.id, card["id"], False)
+                    st.session_state.topic_idx     = tidx + 1
+                    st.session_state.topic_flipped = False
+                    st.rerun()
+            with c2:
+                if st.button("⏭ Saltar", use_container_width=True, key="topic_skip"):
+                    st.session_state.topic_idx     = tidx + 1
+                    st.session_state.topic_flipped = False
+                    st.rerun()
+            with c3:
+                if st.button("✅ Lo sabía", use_container_width=True, type="primary", key="topic_right"):
+                    upsert_topic_progress(user.id, card["id"], True)
+                    st.session_state.topic_idx     = tidx + 1
+                    st.session_state.topic_flipped = False
+                    st.rerun()
+
 # ── Módulo Progreso ──────────────────────────────────────────
 def modulo_progreso(user, nc_user):
     st.markdown("### 📊 Mi progreso")
@@ -651,13 +963,15 @@ def main():
 
     seccion = st.sidebar.radio(
         "Navegar",
-        ["🃏 Flashcards", "📖 Tiempos verbales", "🔄 Importar desde NativeFlow", "📊 Progreso", "👤 Perfil"],
+        ["🃏 Flashcards", "📖 Tiempos verbales", "📚 Tópicos", "🔄 Importar desde NativeFlow", "📊 Progreso", "👤 Perfil"],
     )
 
     if seccion == "🃏 Flashcards":
         modulo_flashcards(user, nc_user)
     elif seccion == "📖 Tiempos verbales":
         modulo_tiempos(user, nc_user)
+    elif seccion == "📚 Tópicos":
+        modulo_topicos(user, nc_user)
     elif seccion == "🔄 Importar desde NativeFlow":
         modulo_importar(user)
     elif seccion == "📊 Progreso":
