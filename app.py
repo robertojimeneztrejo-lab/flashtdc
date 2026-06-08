@@ -241,7 +241,18 @@ def modulo_flashcards(user, nc_user):
         st.info("No hay tarjetas con ese filtro. Usa **Importar desde NativeFlow** en el menú lateral.")
         return
 
-    random.shuffle(cards)
+    # Shuffle solo una vez por filtro — guardado en session_state para que no cambie en cada rerun
+    cache_key = f"fc_cards_{filtro}"
+    if cache_key not in st.session_state or len(st.session_state[cache_key]) != len(cards):
+        shuffled = cards.copy()
+        random.shuffle(shuffled)
+        st.session_state[cache_key] = shuffled
+        st.session_state.fc_index    = 0
+        st.session_state.fc_flipped  = False
+        st.session_state.fc_correct  = 0
+        st.session_state.fc_reviewed = 0
+
+    cards = st.session_state[cache_key]
 
     if "fc_index" not in st.session_state:
         st.session_state.fc_index    = 0
