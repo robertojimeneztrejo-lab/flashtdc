@@ -162,43 +162,69 @@ Responde SOLO con un array JSON válido, sin texto adicional ni backticks:
         return []
 
 
-def gemini_importar_expresiones(expresiones: list[dict]) -> list[dict]:
-    """Recibe registros de native_expressions/error_profile y devuelve nc_cards listas."""
-    if not expresiones:
+def gemini_importar_native(lote: list[dict]) -> list[dict]:
+    """Convierte registros de native_expressions en flashcards pedagógicas."""
+    if not lote:
         return []
-    lista_txt = "\n".join(
-        f"- tipo: {e.get('type','native')} | original: {e.get('original_text') or e.get('expression','')} | corrección/nativa: {e.get('corrected_text') or e.get('native_form','')}"
-        for e in expresiones
+    items = "\n".join(
+        f"{i+1}. EXPRESION: {r['expression']}\n"
+        f"   SIGNIFICADO EN ESPAÑOL: {r['meaning']}\n"
+        f"   EJEMPLO DE USO: {r['example']}\n"
+        f"   TONO: {r['tone']} | ESCENARIO: {r['scenario']}"
+        for i, r in enumerate(lote)
     )
-    prompt = f"""
-Eres un profesor de inglés. Convierte estas expresiones en flashcards de aprendizaje.
-
-Expresiones:
-{lista_txt}
-
-Para cada expresión genera una flashcard clara y útil.
-- front_text: la expresión incorrecta o la pregunta "¿Cómo se dice naturalmente...?"
-- back_text: la forma correcta o nativa
-- example_sentence: una oración de ejemplo usando la forma correcta
-- type: "native" si es expresión nativa, "error" si es corrección de error
-
-Responde SOLO con un array JSON válido, sin texto adicional ni backticks:
-[
-  {{
-    "front_text": "...",
-    "back_text": "...",
-    "example_sentence": "...",
-    "type": "native"
-  }}
-]
-"""
+    prompt = (
+        "Eres un profesor de inglés nativo. Convierte estas expresiones nativas en flashcards "
+        "para un estudiante hispanohablante llamado Roberto.\n\n"
+        "Expresiones:\n" + items + "\n\n"
+        "Para cada expresión crea una flashcard:\n"
+        "- front_text: pregunta en español que invite a recordar la expresión, usando el escenario y tono como contexto.\n"
+        "  Ejemplo: ¿Cómo dirías en inglés (tono profesional, negocio): Nos gustaría medir el interés?\n"
+        "- back_text: la expresión nativa en inglés, clara y directa.\n"
+        "- example_sentence: el ejemplo de uso en inglés (usa el campo example tal cual o mejóralo).\n"
+        "Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
+        '[\n  {\n    "front_text": "...",\n    "back_text": "...",\n    "example_sentence": "...",\n    "type": "native"\n  }\n]'
+    )
     try:
         resp = gemini.generate_content(prompt)
         raw = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         return json.loads(raw)
     except Exception as e:
-        st.error(f"Error procesando con Gemini: {e}")
+        st.error(f"Error procesando expresiones nativas con Gemini: {e}")
         return []
+
+
+def gemini_importar_errores(lote: list[dict]) -> list[dict]:
+    """Convierte registros de error_profile en flashcards pedagógicas."""
+    if not lote:
+        return []
+    items = "\n".join(
+        f"{i+1}. ERROR: {r['error']}\n"
+        f"   CORRECCION: {r['correction']}\n"
+        f"   EXPLICACION: {r['explanation']}\n"
+        f"   FRECUENCIA: {r.get('frequency', 1)}"
+        for i, r in enumerate(lote)
+    )
+    prompt = (
+        "Eres un profesor de inglés. Tu estudiante Roberto comete estos errores frecuentes. "
+        "Convierte cada error en una flashcard de corrección motivadora.\n\n"
+        "Errores:\n" + items + "\n\n"
+        "Para cada error crea una flashcard:\n"
+        "- front_text: muestra el patrón de error como pregunta. Ejemplo: ❌ ¿Qué está mal en: She have 30 years?\n"
+        "- back_text: la corrección concisa con la regla. Ejemplo: ✅ She IS 30 — con edad usa to be, no to have.\n"
+        "- example_sentence: una oración correcta adicional que refuerce la regla.\n"
+        "Tono motivador, enfocado en la regla, no en el error.\n"
+        "Responde SOLO con un array JSON válido, sin texto adicional ni backticks:\n"
+        '[\n  {\n    "front_text": "...",\n    "back_text": "...",\n    "example_sentence": "...",\n    "type": "error"\n  }\n]'
+    )
+    try:
+        resp = gemini.generate_content(prompt)
+        raw = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        return json.loads(raw)
+    except Exception as e:
+        st.error(f"Error procesando errores con Gemini: {e}")
+        return []
+
 
 
 # ── Autenticación ────────────────────────────────────────────
@@ -485,84 +511,81 @@ def modulo_importar(user):
     st.markdown("### 🔄 Importar desde ARIA")
     st.markdown(
         "Lee tus tablas `native_expressions` y `error_profile`, "
-        "las procesa con Gemini y las guarda como flashcards en `nc_cards`."
+        "las procesa con Gemini y guarda flashcards con contexto real en `nc_cards`."
     )
 
-    # Verificar cuántas ya existen
-    ya_importadas = supabase.table("nc_cards").select("id", count="exact")\
-        .in_("source", ["aria", "chat"]).execute()
+    ya_importadas = supabase.table("nc_cards").select("id", count="exact")        .in_("source", ["aria", "chat"]).execute()
     st.info(f"Tarjetas importadas actualmente: **{ya_importadas.count or 0}**")
 
     col1, col2 = st.columns(2)
     with col1:
         lim_native = st.number_input("Expresiones nativas a importar", 5, 50, 10, step=5)
     with col2:
-        lim_error  = st.number_input("Errores corregidos a importar",  5, 50, 10, step=5)
+        lim_error = st.number_input("Errores corregidos a importar", 5, 50, 10, step=5)
 
     if st.button("🚀 Importar y procesar con Gemini", type="primary", use_container_width=True):
-        expresiones = []
-
-        # Leer native_expressions
-        with st.spinner("Leyendo native_expressions..."):
-            try:
-                nat = supabase.table("native_expressions").select("*")\
-                    .limit(int(lim_native)).execute().data or []
-                for row in nat:
-                    expresiones.append({
-                        "type":        "native",
-                        "expression":  row.get("expression") or row.get("text") or str(row),
-                        "native_form": row.get("native_form") or row.get("correction") or "",
-                    })
-                st.caption(f"✅ {len(nat)} expresiones nativas leídas.")
-            except Exception as e:
-                st.warning(f"No se pudo leer native_expressions: {e}")
-
-        # Leer error_profile
-        with st.spinner("Leyendo error_profile..."):
-            try:
-                err = supabase.table("error_profile").select("*")\
-                    .limit(int(lim_error)).execute().data or []
-                for row in err:
-                    expresiones.append({
-                        "type":           "error",
-                        "original_text":  row.get("original_text") or row.get("error") or str(row),
-                        "corrected_text": row.get("corrected_text") or row.get("correction") or "",
-                    })
-                st.caption(f"✅ {len(err)} errores corregidos leídos.")
-            except Exception as e:
-                st.warning(f"No se pudo leer error_profile: {e}")
-
-        if not expresiones:
-            st.error("No se encontraron datos para importar.")
-            return
-
-        # Procesar con Gemini en lotes de 10
-        st.markdown("---")
-        st.markdown(f"**Procesando {len(expresiones)} registros con Gemini...**")
-        progress_bar = st.progress(0)
         total_guardadas = 0
-        lote_size = 10
+        progress_bar = st.progress(0)
+        lote_size = 5
 
-        for i in range(0, len(expresiones), lote_size):
-            lote = expresiones[i:i + lote_size]
-            with st.spinner(f"Lote {i // lote_size + 1}..."):
-                flashcards = gemini_importar_expresiones(lote)
+        # ── Expresiones nativas ──────────────────────────────
+        st.markdown("**Procesando expresiones nativas...**")
+        try:
+            nat_rows = supabase.table("native_expressions")                .select("expression, meaning, example, tone, scenario")                .limit(int(lim_native)).execute().data or []
+            st.caption(f"✅ {len(nat_rows)} expresiones nativas leídas.")
+        except Exception as e:
+            nat_rows = []
+            st.warning(f"No se pudo leer native_expressions: {e}")
 
+        for i in range(0, len(nat_rows), lote_size):
+            lote = nat_rows[i:i + lote_size]
+            with st.spinner(f"Gemini procesando expresiones {i+1}–{min(i+lote_size, len(nat_rows))}..."):
+                flashcards = gemini_importar_native(lote)
             for fc in flashcards:
-                source = "aria" if fc.get("type") == "native" else "chat"
+                if not fc.get("front_text") or not fc.get("back_text"):
+                    continue
                 supabase.table("nc_cards").insert({
-                    "type":             fc.get("type", "native"),
-                    "front_text":       fc.get("front_text", ""),
-                    "back_text":        fc.get("back_text", ""),
+                    "type":             "native",
+                    "front_text":       fc["front_text"],
+                    "back_text":        fc["back_text"],
                     "example_sentence": fc.get("example_sentence", ""),
-                    "source":           source,
+                    "source":           "aria",
                     "is_active":        True,
                 }).execute()
                 total_guardadas += 1
+            progress_bar.progress(min((i + lote_size) / (len(nat_rows) + len([1])), 0.5))
 
-            progress_bar.progress(min((i + lote_size) / len(expresiones), 1.0))
+        # ── Errores corregidos ───────────────────────────────
+        st.markdown("**Procesando errores corregidos...**")
+        try:
+            err_rows = supabase.table("error_profile")                .select("error, correction, explanation, frequency")                .limit(int(lim_error)).execute().data or []
+            st.caption(f"✅ {len(err_rows)} errores corregidos leídos.")
+        except Exception as e:
+            err_rows = []
+            st.warning(f"No se pudo leer error_profile: {e}")
 
-        st.success(f"✅ ¡Importación completada! {total_guardadas} flashcards guardadas en nc_cards.")
+        for i in range(0, len(err_rows), lote_size):
+            lote = err_rows[i:i + lote_size]
+            with st.spinner(f"Gemini procesando errores {i+1}–{min(i+lote_size, len(err_rows))}..."):
+                flashcards = gemini_importar_errores(lote)
+            for fc in flashcards:
+                if not fc.get("front_text") or not fc.get("back_text"):
+                    continue
+                supabase.table("nc_cards").insert({
+                    "type":             "error",
+                    "front_text":       fc["front_text"],
+                    "back_text":        fc["back_text"],
+                    "example_sentence": fc.get("example_sentence", ""),
+                    "source":           "chat",
+                    "is_active":        True,
+                }).execute()
+                total_guardadas += 1
+            progress_bar.progress(min(0.5 + (i + lote_size) / (len(err_rows) + len([1])) * 0.5, 1.0))
+
+        progress_bar.progress(1.0)
+        st.success(f"✅ ¡Listo! {total_guardadas} flashcards con contexto real guardadas.")
+        st.balloons()
+
         st.balloons()
 
 
