@@ -150,59 +150,25 @@ def gemini_ejemplos_tiempo(tense: dict, n: int = 5) -> list[dict]:
 
 
 def gemini_procesar_native(row: dict) -> dict | None:
-    """Una llamada por registro de native_expressions. Sin mezcla posible."""
-    prompt = (
-        "Eres un profesor de inglés nativo. Crea UNA flashcard de estudio para un hispanohablante.\n\n"
-        f"EXPRESION NATIVA EN INGLES: {row['expression']}\n"
-        f"SIGNIFICADO EN ESPAÑOL: {row['meaning']}\n"
-        f"EJEMPLO DE USO: {row['example']}\n"
-        f"TONO: {row['tone']}\n"
-        f"ESCENARIO: {row['scenario']}\n\n"
-        "Reglas:\n"
-        "- front_text: pregunta en español usando escenario y tono. "
-        "  Formato: ¿Cómo dirías en inglés (contexto [escenario], tono [tono]): '[significado en español]'?\n"
-        "- back_text: SOLO la expresión nativa en inglés, sin traducción.\n"
-        "- example_sentence: el ejemplo de uso en inglés exactamente como se dio.\n\n"
-        "Responde SOLO con un objeto JSON sin texto adicional ni backticks:\n"
-        '{"front_text":"...","back_text":"...","example_sentence":"..."}'
-    )
-    try:
-        resp = gemini.generate_content(prompt)
-        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        data = json.loads(raw)
-        data["type"] = "native"
-        return data
-    except Exception as e:
-        st.warning(f"Error en expresión '{row.get('expression','')}': {e}")
-        return None
+    """Mapeo directo: meaning al frente, expression como respuesta. Sin IA, sin mezcla."""
+    return {
+        "front_text":       f"¿Cómo se dice en inglés: \"{row['meaning']}\"?",
+        "back_text":        row["expression"],
+        "example_sentence": row.get("example", ""),
+        "type":             "native",
+    }
 
 
 def gemini_procesar_error(row: dict) -> dict | None:
-    """Una llamada por registro de error_profile. Sin mezcla posible."""
-    prompt = (
-        "Eres un profesor de inglés. Crea UNA flashcard de corrección para Roberto, "
-        "hispanohablante que comete este error en inglés.\n\n"
-        f"ERROR COMETIDO: {row['error']}\n"
-        f"CORRECCION: {row['correction']}\n"
-        f"EXPLICACION DE LA REGLA: {row['explanation']}\n\n"
-        "Reglas:\n"
-        "- front_text: muestra el patrón de error como pregunta con un ejemplo corto inventado. "
-        "  Formato: ❌ ¿Qué está mal en: \"[frase corta de ejemplo del error]\"?\n"
-        "- back_text: la corrección directa con la regla resumida. "
-        "  Formato: ✅ [corrección]. [regla breve].\n"
-        "- example_sentence: oración correcta en inglés que refuerce la regla.\n\n"
-        "Responde SOLO con un objeto JSON sin texto adicional ni backticks:\n"
-        '{"front_text":"...","back_text":"...","example_sentence":"..."}'
-    )
-    try:
-        resp = gemini.generate_content(prompt)
-        raw  = resp.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        data = json.loads(raw)
-        data["type"] = "error"
-        return data
-    except Exception as e:
-        st.warning(f"Error procesando '{row.get('error','')}': {e}")
-        return None
+    """Mapeo directo: error al frente, correction como respuesta. Sin IA, sin mezcla."""
+    return {
+        "front_text":       f"❌ ¿Cuál es el error en este patrón?: {row['error']}",
+        "back_text":        f"✅ {row['correction']}",
+        "example_sentence": row.get("explanation", ""),
+        "type":             "error",
+    }
+
+
 
 
 # ── Autenticación ────────────────────────────────────────────
