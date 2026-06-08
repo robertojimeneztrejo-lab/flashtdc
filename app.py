@@ -60,9 +60,14 @@ def get_or_create_nc_user(user):
     res = supabase.table("nc_users").select("*").eq("user_id", user.id).execute()
     if res.data:
         return res.data[0]
+    display_name = (
+        st.session_state.pop("pending_display_name", None)
+        or (user.user_metadata or {}).get("display_name")
+        or user.email.split("@")[0]
+    )
     new = supabase.table("nc_users").insert({
         "user_id": user.id,
-        "display_name": user.email.split("@")[0],
+        "display_name": display_name,
         "email": user.email,
     }).execute()
     return new.data[0]
@@ -228,13 +233,13 @@ def pantalla_login():
                 st.warning("Completa todos los campos.")
                 return
             try:
-                res = supabase.auth.sign_up({"email": r_email, "password": r_pass})
+                res = supabase.auth.sign_up({
+                    "email": r_email,
+                    "password": r_pass,
+                    "options": {"data": {"display_name": r_name}},
+                })
                 if res.user:
-                    supabase.table("nc_users").insert({
-                        "user_id": res.user.id,
-                        "display_name": r_name,
-                        "email": r_email,
-                    }).execute()
+                    st.session_state["pending_display_name"] = r_name
                     st.success("¡Cuenta creada! Revisa tu correo para confirmar y luego inicia sesión.")
                 else:
                     st.error("No se pudo crear la cuenta.")
