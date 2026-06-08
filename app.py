@@ -489,59 +489,101 @@ def modulo_importar(user):
         progress_bar    = st.progress(0)
         procesadas      = 0
 
-        # ── Expresiones nativas — una por una ───────────────
+        # ── Expresiones nativas — una por una, sin duplicados ──
         st.markdown("**Procesando expresiones nativas...**")
         try:
             nat_rows = supabase.table("native_expressions")\
                 .select("expression, meaning, example, tone, scenario")\
-                .limit(int(lim_native)).execute().data or []
-            st.caption(f"✅ {len(nat_rows)} registros leídos.")
+                .execute().data or []
+            st.caption(f"✅ {len(nat_rows)} registros leídos de NativeFlow.")
         except Exception as e:
             nat_rows = []
             st.warning(f"No se pudo leer native_expressions: {e}")
 
-        for row in nat_rows:
+        # Obtener source_refs ya importados para evitar duplicados
+        ya_refs = {
+            r["source_ref"] for r in
+            supabase.table("nc_cards").select("source_ref")
+            .eq("source", "aria").execute().data or []
+            if r.get("source_ref")
+        }
+
+        nat_nuevas = [r for r in nat_rows if r.get("expression","") not in ya_refs]
+        nat_skip   = len(nat_rows) - len(nat_nuevas)
+        if nat_skip:
+            st.caption(f"⏭ {nat_skip} expresiones ya importadas — omitidas.")
+
+        total_total = len(nat_nuevas) + int(lim_error)
+        if total_total == 0:
+            total_total = 1
+
+        for row in nat_nuevas:
             with st.spinner(f"Gemini → {row.get('expression','')[:45]}..."):
                 fc = gemini_procesar_native(row)
             if fc and fc.get("front_text") and fc.get("back_text"):
-                supabase.table("nc_cards").insert({
-                    "type": "native", "front_text": fc["front_text"],
-                    "back_text": fc["back_text"],
-                    "example_sentence": fc.get("example_sentence",""),
-                    "source": "aria", "is_active": True,
-                }).execute()
-                total_guardadas += 1
+                try:
+                    supabase.table("nc_cards").insert({
+                        "type": "native", "front_text": fc["front_text"],
+                        "back_text": fc["back_text"],
+                        "example_sentence": fc.get("example_sentence",""),
+                        "source": "aria", "is_active": True,
+                        "source_ref": row.get("expression",""),
+                    }).execute()
+                    total_guardadas += 1
+                except Exception:
+                    pass  # índice único bloqueó duplicado
             procesadas += 1
-            progress_bar.progress(procesadas / total_total)
+            progress_bar.progress(min(procesadas / total_total, 0.5))
 
-        # ── Errores corregidos — uno por uno ────────────────
+        # ── Errores corregidos — uno por uno, sin duplicados ─
         st.markdown("**Procesando errores corregidos...**")
         try:
             err_rows = supabase.table("error_profile")\
                 .select("error, correction, explanation, frequency")\
-                .limit(int(lim_error)).execute().data or []
-            st.caption(f"✅ {len(err_rows)} registros leídos.")
+                .execute().data or []
+            st.caption(f"✅ {len(err_rows)} registros leídos de NativeFlow.")
         except Exception as e:
             err_rows = []
             st.warning(f"No se pudo leer error_profile: {e}")
 
-        for row in err_rows:
+        err_refs = {
+            r["source_ref"] for r in
+            supabase.table("nc_cards").select("source_ref")
+            .eq("source", "chat").execute().data or []
+            if r.get("source_ref")
+        }
+
+        err_nuevos = [r for r in err_rows if r.get("error","") not in err_refs]
+        err_skip   = len(err_rows) - len(err_nuevos)
+        if err_skip:
+            st.caption(f"⏭ {err_skip} errores ya importados — omitidos.")
+
+        total_total = (len(nat_nuevas) + len(err_nuevos)) or 1
+
+        for row in err_nuevos:
             with st.spinner(f"Gemini → {row.get('error','')[:45]}..."):
                 fc = gemini_procesar_error(row)
             if fc and fc.get("front_text") and fc.get("back_text"):
-                supabase.table("nc_cards").insert({
-                    "type": "error", "front_text": fc["front_text"],
-                    "back_text": fc["back_text"],
-                    "example_sentence": fc.get("example_sentence",""),
-                    "source": "chat", "is_active": True,
-                }).execute()
-                total_guardadas += 1
+                try:
+                    supabase.table("nc_cards").insert({
+                        "type": "error", "front_text": fc["front_text"],
+                        "back_text": fc["back_text"],
+                        "example_sentence": fc.get("example_sentence",""),
+                        "source": "chat", "is_active": True,
+                        "source_ref": row.get("error",""),
+                    }).execute()
+                    total_guardadas += 1
+                except Exception:
+                    pass  # índice único bloqueó duplicado
             procesadas += 1
-            progress_bar.progress(min(procesadas / total_total, 1.0))
+            progress_bar.progress(min(0.5 + procesadas / total_total * 0.5, 1.0))
 
         progress_bar.progress(1.0)
-        st.success(f"✅ ¡Listo! {total_guardadas} flashcards con contexto real guardadas.")
-        st.balloons()
+        if total_guardadas == 0 and (nat_skip + err_skip) > 0:
+            st.info("✅ Todo ya estaba importado. No hay contenido nuevo en NativeFlow.")
+        else:
+            st.success(f"✅ ¡Listo! {total_guardadas} flashcards nuevas guardadas.")
+            st.balloons()
 
 
 # ── Módulo Progreso ──────────────────────────────────────────
